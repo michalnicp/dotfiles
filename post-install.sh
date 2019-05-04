@@ -1,26 +1,75 @@
 #!/usr/bin/env bash
 
-pacman -Syu --noconfirm
+set -euo pipefail
 
-pacman -S --noconfirm reflector rsync
-reflector -l 200 --sort rate --save /etc/pacman.d/mirrorlist
+# colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
 
-pacman -S --noconfirm git base-devel
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ $EUID -eq 0 ]]; then
+    echo "Please run as normal user." >&2
+    exit 1
+fi
+
+# ask for password
+sudo -v || exit $?
+while true; do sleep 1m; sudo -nv; done &
+
+# get latest mirrorlist
+# tmpfile=$(mktemp --suffix=_mirrorlist)
+# curl -o $tmpfile https://www.archlinux.org/mirrorlist/?country=CA&country=US&protocol=https&use_mirror_status=on
+# mv /etc/pacman.d/mirrorlist{,.orig}
+# mv $tmpfile /etc/pacman.d/mirrorlist
+
+# install reflector
+sudo pacman -S --noconfirm --needed reflector
+
+sudo bash -c "cat > /etc/systemd/system/reflector.service << EOF
+[Unit]
+Description=Pacman mirrorlist update
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/reflector --protocol https --latest 30 --number 20 --sort rate --save /etc/pacman.d/mirrorlist
+
+[Install]
+RequiredBy=multi-user.target
+EOF"
+sudo systemctl daemon-reload
+sudo systemctl enable reflector.service
+
+sudo cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bkp."$(date +%Y%m%d%H%M%S)"
+sudo reflector --protocol https --latest 30 --number 20 --sort rate --save /etc/pacman.d/mirrorlist
+
+# full system upgrade
+sudo pacman -Syyu --noconfirm
 
 # install yay
-git clone https://aur.archlinux.org/yay.git
-cd yay
-makepkg -si
+sudo pacman -S --noconfirm --needed base-devel git
 
-# enable x11 forwarding
-sed -i '/^#X11Forwarding/c\X11Forwarding yes' /etc/ssh/sshd_config
-systemctl restart sshd
+git -C /tmp/yay pull || git clone https://aur.archlinux.org/yay.git /tmp/yay
+(cd /tmp/yay && makepkg -si --noconfirm)
+
+# install ssh
+sudo pacman -S --noconfirm --needed openssh
+
+sudo sed -i '/^#X11Forwarding/c\X11Forwarding yes' /etc/ssh/sshd_config
+
+sudo systemctl enable sshd
+sudo systemctl start sshd
 
 # install xorg
-pacman -S --noconfirm xorg xorg-xinit xorg-xauth
+sudo pacman -S --noconfirm --needed xorg xorg-xinit
+ln -sf "${DIR}/.xinitrc" "${HOME}/.xinitrc"
 
 # install fonts
-pacman -S --noconfirm \
+sudo pacman -S --noconfirm --needed \
     fontconfig \
     ttf-dejavu \
     ttf-liberation \
@@ -30,66 +79,57 @@ pacman -S --noconfirm \
 
 # disable embedded bitmap for all fonts, enable sub-pixel RGB rendering, and enable the LCD filter
 # which is designed to reduce colour fringing when subpixel rendering is used.
-ln -s /etc/fonts/conf.avail/70-no-bitmaps.conf /etc/fonts/conf.d
-ln -s /etc/fonts/conf.avail/10-sub-pixel-rgb.conf /etc/fonts/conf.d
-ln -s /etc/fonts/conf.avail/11-lcdfilter-default.conf /etc/fonts/conf.d
+mkdir -p "${HOME}/.config/fontconfig/conf.d"
+ln -sf /etc/fonts/conf.avail/70-no-bitmaps.conf "${HOME}/.config/fontconfig/conf.d/70-no-bitmaps.conf"
+ln -sf /etc/fonts/conf.avail/10-sub-pixel-rgb.conf "${HOME}/.config/fontconfig/conf.d/10-sub-pixel-rgb.conf"
+ln -sf /etc/fonts/conf.avail/11-lcdfilter-default.conf "${HOME}/.config/fontconfig/conf.d/11-lcdfilter-default.conf"
 
-# configure fonts
-mkdir -p .config/fontconfig
-cat << EOF > ./config/fontconfig/fonts.conf
-<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<fontconfig>
+mkdir -p "${HOME}/.config/fontconfig"
+ln -sf "${DIR}.config/fontconfig/fonts.conf" "${HOME}/.config/fontconfig/fonts.conf"
 
-    <!-- general settings -->
-    <match target="font">
-        <edit name="autohint" mode="assign"><bool>false</bool></edit>
-        <edit name="antialias" mode="assign"><bool>true</bool></edit>
-        <edit name="hinting" mode="assign"><bool>true</bool></edit>
-        <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
-        <edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit>
-    </match>
+# install xdg
+sudo pacman -S --noconfirm --needed xdg-user-dirs
 
-    <match target="pattern">
-        <test qual="any" name="family"><string>serif</string></test>
-        <edit name="family" mode="prepend" binding="strong"><string>DejaVu Serif</string></edit>
-    </match>
+mkdir -p "${HOME}/.config"
+ln -sf "${DIR}/.config/user-dirs.dirs" "${HOME}/.config/user-dirs.dirs"
+xdg-user-dirs-update
 
-    <match target="pattern">
-        <test qual="any" name="family"><string>sans-serif</string></test>
-        <edit name="family" mode="prepend" binding="strong"><string>DejaVu Sans</string></edit>
-    </match>
+# install bspwm (window manager)
+sudo pacman -S --noconfirm --needed bspwm
+mkdir -p "${HOME}/.config/bspwm"
+ln -sf "${DIR}/.config/bspwm/bspwmrc" "${HOME}/.config/bspwm/bspwmrc"
 
-    <match target="pattern">
-        <test qual="any" name="family"><string>monospace</string></test>
-        <edit name="family" mode="prepend" binding="strong"><string>DejaVu Sans Mono</string></edit>
-    </match>
-</fontconfig>
-EOF
+# install sxhkd (hotkey deamon)
+sudo pacman -S --noconfirm --needed sxhkd
+mkdir -p "${HOME}/.config/sxhkd"
+ln -sf "${DIR}/.config/sxhkd/sxhkdrc" "${HOME}/.config/sxhkd/sxhkdrc"
 
-# install dwm
-git clone https://git.suckless.org/dwm
-cd dwm
-make clean install
+# create symlinks
+ln -sf "${DIR}/.bashrc" "${HOME}/.bashrc"
+ln -sf "${DIR}/.bash_profile" "${HOME}/.bash_profile"
 
-# install st
-git clone https://git.suckless.org/st
-cd st
-make clean install
+# install git
+git config --global core.excludesfile '~/.gitignore_global'
+ln -sf "${DIR}/.gitignore_global" "${HOME}/.gitignore_global"
 
-# install ranger file manager
-pacman -S ranger
+# install neovim
+sudo pacman -S --noconfirm --needed neovim
 
-# install user dirs
-pacman -S xdg-user-dirs
-# edit .config/user-dirs.dirs and change to lowercase
-cat << EOF > user-dirs.dirs
-XDG_DESKTOP_DIR="$HOME/desktop"
-XDG_DOWNLOAD_DIR="$HOME/downloads"
-XDG_TEMPLATES_DIR="$HOME/templates"
-XDG_PUBLICSHARE_DIR="$HOME/public"
-XDG_DOCUMENTS_DIR="$HOME/documents"
-XDG_MUSIC_DIR="$HOME/music"
-XDG_PICTURES_DIR="$HOME/pictures"
-XDG_VIDEOS_DIR="$HOME/videos"
-EOF
+curl -fLo ~/.local/share/nvim/site/autoload/plug.vim --create-dirs \
+    https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+
+mkdir -p ~/.config/nvim
+ln -sf "${DIR}/.config/nvim/init.vim" "${HOME}/.config/nvim/init.vim"
+nvim -u <(sed -n '/^call plug#begin/,/^call plug#end/p' .config/nvim/init.vim) +PlugInstall +qall
+
+# install alacritty (terminal emulator)
+sudo pacman -S --noconfirm alacritty
+
+mkdir -p "${HOME}/.config/alacritty"
+ln -sf "${DIR}/.config/alacritty/alacritty.yml" "${HOME}/.config/alacritty/alacritty.yml"
+
+# install ranger (file manager)
+sudo pacman -S --noconfirm ranger
+
+# install web browsers
+sudo pacman -S --noconfirm chromium firefox

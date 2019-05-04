@@ -1,0 +1,19 @@
+#! /bin/sh
+
+bspc config border_width 0
+bspc config window_gap 8
+bspc config split_ratio          0.52
+bspc config borderless_monocle   true
+bspc config gapless_monocle      true
+
+# wallpaper
+feh --bg-scale ~/src/dotfiles/wallpaper/mowing_the_lawn.png
+
+# monitors
+bspc monitor -d I II III IV V VI VII VIII IX X
+
+# rules
+bspc rule -a Gimp state=floating follow=on
+bspc rule -a Screenkey manage=off
+
+sxhkd &

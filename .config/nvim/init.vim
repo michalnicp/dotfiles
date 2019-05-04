@@ -96,8 +96,8 @@ function TrimTrailingWhitespace()
     endif
 endfunction
 
-" linespec filename:line
-function LineSpec()
+" linespec filename:linenum
+function Linespec()
     let linespec = @% . ":" . line(".")
     echo linespec
     call system("xsel -b", linespec)
