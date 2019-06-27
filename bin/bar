@@ -1,0 +1,19 @@
+#!/bin/bash
+
+clock() {
+    while :; do
+        time="$(date +'%H:%M - %-d %b %Y')"
+        printf "CLOCK${time}\n"
+
+        sleep 1
+    done
+}
+
+>(clock) | while IFS= read -r line; do
+    case "$line" in
+        CLOCK*)
+            clock_=${line#CLOCK}
+            ;;
+    esac
+    printf "%{r}${clock_}\n"
+done
